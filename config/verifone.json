@@ -1,12 +1,22 @@
 {
 	"brand": "verifone",
+	"links": [
+		{
+			"category": "victa",
+			"url": "https://www.verifone.com/en-us/verifone-victa"
+		},
+		{
+			"category": "mPOS",
+			"url": "https://www.verifone.com/en-us/product-type/mpos"
+		}
+	],
 	"output": {
 		"data_dir": "output/data",
 		"image_dir": "output/images",
 		"save_per_link_files": true,
 		"save_combined_file": true
 	},
-	"link_defaults": {
+	"master_page": {
 		"type": "listing",
 		"selectors": {
 			"product_container": "div.hardware-products_item",
@@ -41,13 +51,7 @@
 			]
 		}
 	},
-	"links": [
-		{
-			"category": "products",
-			"url": "https://www.verifone.com/en-us/products"
-		}
-	],
-	"detail": {
+	"details_page": {
 		"selectors": {
 			"product_name": [
 				{

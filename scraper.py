@@ -92,7 +92,7 @@ class Scraper:
                 products = self.deduplicate_products(products)
                 print(f"[INFO] Products found: {len(products)}")
 
-                if self.config.get('detail'):
+                if self.config.get('details_page'):
                     self.enrich_products_with_details(products)
 
                 page_result['products'] = products
@@ -216,12 +216,12 @@ class Scraper:
 
     def enrich_products_with_details(self, products: List[Dict[str, Any]]):
         for product in products:
-            detail_url = product.get('detail_url')
-            if not detail_url:
+            detail_page_url = product.get('detail_url')
+            if not detail_page_url:
                 continue
 
-            print(f"[INFO] Detail: {detail_url}")
-            soup = self.fetch_soup(detail_url)
+            print(f"[INFO] Detail: {detail_page_url}")
+            soup = self.fetch_soup(detail_page_url)
             if not soup:
                 continue
 
@@ -233,7 +233,7 @@ class Scraper:
             detail_data = self.extract_detail_data(soup, product.get('product_name'))
             product.update(detail_data)
 
-            images = self.extract_images_from_config(soup, detail_url, product.get('product_name'))
+            images = self.extract_images_from_config(soup, detail_page_url, product.get('product_name'))
             if self.has_any_images(images):
                 product['images'] = images
             else:
@@ -241,7 +241,7 @@ class Scraper:
                 # use the listing image URL (and download it if images.download=True).
                 listing_img = product.get('listing_image_url')
                 if listing_img:
-                    listing_img_url = urljoin(detail_url, listing_img)
+                    listing_img_url = urljoin(detail_page_url, listing_img)
                     image_cfg = self.config.get('images', {})
                     download_flag = bool(image_cfg.get('download', False))
 
@@ -354,7 +354,7 @@ class Scraper:
         return len(candidate) < len(current)
 
     def extract_detail_product_name(self, soup: BeautifulSoup) -> Optional[str]:
-        detail_cfg = self.config.get('detail', {})
+        detail_cfg = self.config.get('details_page', {})
         selectors_cfg = detail_cfg.get('selectors', {})
         name_rules = selectors_cfg.get('product_name', [])
 
@@ -372,7 +372,7 @@ class Scraper:
         return None
 
     def extract_detail_data(self, soup: BeautifulSoup, product_name: Optional[str]) -> Dict[str, Any]:
-        detail_cfg = self.config.get('detail', {})
+        detail_cfg = self.config.get('details_page', {})
         rules = detail_cfg.get('extract', [])
         result: Dict[str, Any] = {}
 
@@ -849,7 +849,7 @@ class Scraper:
         return merged
 
     def default_link_template(self) -> Dict[str, Any]:
-        defaults = self.config.get('link_defaults')
+        defaults = self.config.get('master_page')
         if isinstance(defaults, dict):
             return deepcopy(defaults)
 

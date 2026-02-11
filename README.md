@@ -20,10 +20,10 @@ pip install requests beautifulsoup4
 
 Estructura importante del `config.json` actualizado:
 
-- `link_defaults`: configuración compartida para todas las URLs (selectores, tipo de página, etc.).
-- `links`: lista de URLs/categorías a scrapear reutilizando `link_defaults`.
+- `master_page`: configuración compartida para todas las URLs (selectores, tipo de página, etc.).
+- `links`: lista de URLs/categorías a scrapear reutilizando `master_page`.
   - Puede ser string (`"https://sitio/categoria"`) o objeto (`{"category": "...", "url": "..."}`).
-  - Cada link puede sobrescribir partes de `link_defaults` si lo necesitas.
+  - Cada link puede sobrescribir partes de `master_page` si lo necesitas.
 - `output.save_per_link_files`: si es `true`, guarda un JSON por link/categoría.
 - `output.save_combined_file`: si es `true`, también guarda el archivo combinado de toda la marca.
 
