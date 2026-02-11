@@ -273,12 +273,155 @@ class Scraper:
             mode = rule.get('mode', 'container')
             if mode == 'grouped_sections':
                 result[key] = self.extract_grouped_sections(soup, rule, product_name)
+            elif mode == 'keyed_sections':
+                result[key] = self.extract_keyed_sections(soup, rule)
+            elif mode == 'repeat':
+                result[key] = self.extract_repeat_items(soup, rule)
+            elif mode == 'pairs':
+                result[key] = self.extract_pairs(soup, rule)
             elif mode == 'paired_headings_paragraphs':
                 result[key] = self.extract_paired_headings_paragraphs(soup, rule)
             else:
                 result[key] = self.process_extract_rules(soup, [rule]).get(key, [])
 
         return result
+
+    def extract_keyed_sections(self, soup: BeautifulSoup, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
+        container_sel = rule.get('container_selector')
+        section_sel = rule.get('section_selector')
+        title_sel = rule.get('title_selector')
+        value_selectors = rule.get('value_selectors', [])
+        cfg_rules = rule.get('rules', {}) if isinstance(rule.get('rules', {}), dict) else {}
+
+        skip_if_title_empty = bool(cfg_rules.get('skip_if_title_empty', False))
+        skip_if_no_values = bool(cfg_rules.get('skip_if_no_values', False))
+
+        containers = soup.select(container_sel) if container_sel else [soup]
+        out: List[Dict[str, Any]] = []
+
+        for container in containers:
+            sections = container.select(section_sel) if section_sel else []
+
+            # Fallback: some pages don't use section containers, but do have h4 + list/table blocks.
+            if not sections and title_sel:
+                for heading in container.select(title_sel):
+                    title = heading.get_text(strip=True)
+                    if skip_if_title_empty and not title:
+                        continue
+
+                    values: List[str] = []
+                    for sibling in heading.next_siblings:
+                        if not getattr(sibling, 'name', None):
+                            continue
+                        if re.match(r'^h[1-6]$', sibling.name or ''):
+                            break
+                        values.extend(self.collect_section_values(sibling, value_selectors))
+
+                    if skip_if_no_values and not values:
+                        continue
+                    out.append({'title': title, 'values': values})
+                continue
+
+            for section in sections:
+                title = ''
+                if title_sel:
+                    title_el = section.select_one(title_sel)
+                    if title_el:
+                        title = title_el.get_text(strip=True)
+
+                if skip_if_title_empty and not title:
+                    continue
+
+                values = self.collect_section_values(section, value_selectors)
+                if skip_if_no_values and not values:
+                    continue
+
+                out.append({'title': title, 'values': values})
+
+        return out
+
+    def collect_section_values(self, section: BeautifulSoup, value_selectors: List[Dict[str, Any]]) -> List[str]:
+        values: List[str] = []
+
+        for value_rule in value_selectors:
+            v_mode = value_rule.get('mode', 'text')
+            v_sel = value_rule.get('selector')
+            if not v_sel:
+                continue
+
+            if v_mode == 'list':
+                for el in section.select(v_sel):
+                    txt = el.get_text(strip=True)
+                    if txt:
+                        values.append(txt)
+            elif v_mode == 'table':
+                for table in section.select(v_sel):
+                    rows = table.find_all('tr')
+                    if rows:
+                        for row in rows:
+                            row_text = ' '.join(td.get_text(strip=True) for td in row.find_all(['td', 'th']))
+                            if row_text:
+                                values.append(row_text)
+                    else:
+                        txt = table.get_text(strip=True)
+                        if txt:
+                            values.append(txt)
+            else:
+                for el in section.select(v_sel):
+                    txt = el.get_text(strip=True)
+                    if txt:
+                        values.append(txt)
+
+        return values
+
+    def extract_repeat_items(self, soup: BeautifulSoup, rule: Dict[str, Any]) -> List[Dict[str, Any]]:
+        container_sel = rule.get('container_selector')
+        item_sel = rule.get('item_selector')
+        fields = rule.get('fields', [])
+        cfg_rules = rule.get('rules', {}) if isinstance(rule.get('rules', {}), dict) else {}
+        drop_items_if_title_empty = bool(cfg_rules.get('drop_items_if_title_empty', False))
+
+        containers = soup.select(container_sel) if container_sel else [soup]
+        out: List[Dict[str, Any]] = []
+
+        for container in containers:
+            items = container.select(item_sel) if item_sel else [container]
+            for node in items:
+                item: Dict[str, Any] = {}
+                for field in fields:
+                    key = field.get('key')
+                    if not key:
+                        continue
+                    item[key] = self.extract_field_value(node, field, '')
+
+                if drop_items_if_title_empty and not self.normalize_text(item.get('title')):
+                    continue
+
+                if any(v not in (None, '', []) for v in item.values()):
+                    out.append(item)
+
+        return out
+
+    def extract_pairs(self, soup: BeautifulSoup, rule: Dict[str, Any]) -> List[Dict[str, str]]:
+        container_sel = rule.get('container_selector')
+        title_sel = rule.get('pair_title_selector')
+        text_sel = rule.get('pair_text_selector')
+
+        containers = soup.select(container_sel) if container_sel else [soup]
+        out: List[Dict[str, str]] = []
+
+        for container in containers:
+            titles = [el.get_text(strip=True) for el in container.select(title_sel)] if title_sel else []
+            texts = [el.get_text(strip=True) for el in container.select(text_sel)] if text_sel else []
+            max_len = max(len(titles), len(texts), 0)
+
+            for i in range(max_len):
+                title = titles[i] if i < len(titles) else ''
+                text = texts[i] if i < len(texts) else ''
+                if title or text:
+                    out.append({'title': title, 'text': text})
+
+        return out
 
     def extract_grouped_sections(self, soup: BeautifulSoup, rule: Dict[str, Any], product_name: Optional[str]) -> List[Dict[str, Any]]:
         container_sel = rule.get('container_selector')

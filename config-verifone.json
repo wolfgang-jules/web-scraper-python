@@ -114,7 +114,7 @@
 			"brand_folder": "{brand}",
 			"product_folder": "{brand}_{product_name_sanitized}"
 		},
-		"naming": "image_{index}",
+		"naming": "img_{brand}_{product_name_sanitized}_{index}",
 		"sources": [
 			{
 				"key": "primary_image",
