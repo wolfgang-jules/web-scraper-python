@@ -111,7 +111,7 @@
 	"images": {
 		"download": true,
 		"folders": {
-			"path_folder": "{brand}/{product_name_sanitized}"
+			"path_folder": "{brand}"
 		},
 		"naming": "img_{brand}_{product_name_sanitized}_{index}",
 		"sources": [
