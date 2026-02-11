@@ -82,6 +82,7 @@ class Scraper:
 
             if self.is_listing_page(page):
                 products = self.extract_listing_products(soup, page)
+                products = self.deduplicate_products(products)
                 print(f"[INFO] Products found: {len(products)}")
 
                 if self.config.get('detail'):
@@ -100,6 +101,7 @@ class Scraper:
 
             pages.append(page_result)
 
+        all_products = self.deduplicate_products(all_products)
         self.save_output(pages, all_products)
 
     def fetch_soup(self, url: str) -> Optional[BeautifulSoup]:
@@ -144,6 +146,32 @@ class Scraper:
             products.append(item)
 
         return products
+
+    def product_dedup_key(self, product: Dict[str, Any]) -> str:
+        detail_url = self.normalize_text(product.get('detail_url'))
+        if detail_url:
+            return f"url:{detail_url.casefold()}"
+
+        product_name = self.normalize_text(product.get('product_name') or product.get('name'))
+        if product_name:
+            return f"name:{product_name.casefold()}"
+
+        listing_image_url = self.normalize_text(product.get('listing_image_url'))
+        if listing_image_url:
+            return f"img:{listing_image_url.casefold()}"
+
+        return f"raw:{json.dumps(product, sort_keys=True, ensure_ascii=False)}"
+
+    def deduplicate_products(self, products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen = set()
+        deduped: List[Dict[str, Any]] = []
+        for product in products:
+            key = self.product_dedup_key(product)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(product)
+        return deduped
 
     def extract_field_value(self, container: BeautifulSoup, field_cfg: Dict[str, Any], base_url: str) -> Any:
         selector = field_cfg.get('selector')
@@ -585,7 +613,6 @@ class Scraper:
 
         folders_cfg = image_cfg.get('folders', {})
         brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
-        product_folder_tpl = folders_cfg.get('product_folder', '{product_name_sanitized}')
 
         brand_safe = safe_filename(self.brand)
         product_safe = safe_filename(str(product_name or 'unnamed'))
@@ -599,8 +626,7 @@ class Scraper:
         }
 
         brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
-        product_folder = safe_filename(self.render_template(product_folder_tpl, token_values))
-        out_dir = os.path.join(self.image_dir, brand_folder, product_folder)
+        out_dir = os.path.join(self.image_dir, brand_folder)
 
         result: Dict[str, List[str]] = {}
         image_index = 1
@@ -678,7 +704,7 @@ class Scraper:
                     img_url = urljoin(base_url, src)
                     if download_flag:
                         ext = get_file_extension(img_url) or 'jpg'
-                        out_dir = os.path.join(self.image_dir, brand_dir, safe_filename(base_url))
+                        out_dir = os.path.join(self.image_dir, brand_dir)
                         ensure_dir(out_dir)
                         img_filename = f"{key}_{img_count}.{ext}"
                         img_path = os.path.join(out_dir, img_filename)
@@ -716,7 +742,8 @@ class Scraper:
             'brand': self.brand,
             'pages': pages,
         }
-        if products:
+        include_flat_products = bool(self.config.get('output', {}).get('include_flat_products', False))
+        if include_flat_products and products:
             data['products'] = products
 
         with open(out_path, 'w', encoding='utf-8') as f:
