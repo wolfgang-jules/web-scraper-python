@@ -223,8 +223,28 @@ class Scraper:
             product.update(detail_data)
 
             images = self.extract_images_from_config(soup, detail_url, product.get('product_name'))
-            if images:
+            if self.has_any_images(images):
                 product['images'] = images
+            elif 'images' in product:
+                # Avoid serializing empty image arrays.
+                product.pop('images', None)
+
+    def has_any_images(self, images: Dict[str, Any]) -> bool:
+        if not isinstance(images, dict):
+            return False
+        for value in images.values():
+            if isinstance(value, list) and value:
+                return True
+        return False
+
+    def normalize_truthy_flag(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value == 1
+        if isinstance(value, str):
+            return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        return False
 
     def normalize_text(self, value: Optional[str]) -> str:
         if value is None:
@@ -675,7 +695,8 @@ class Scraper:
                         collected.append(image_url)
                         image_index += 1
 
-            result[key] = collected
+            if collected:
+                result[key] = collected
 
         return result
 
@@ -742,7 +763,9 @@ class Scraper:
             'brand': self.brand,
             'pages': pages,
         }
-        include_flat_products = bool(self.config.get('output', {}).get('include_flat_products', False))
+        include_flat_products = self.normalize_truthy_flag(
+            self.config.get('output', {}).get('include_flat_products', False)
+        )
         if include_flat_products and products:
             data['products'] = products
 
