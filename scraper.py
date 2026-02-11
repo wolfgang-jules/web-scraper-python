@@ -203,6 +203,13 @@ class Scraper:
             return ''
         return re.sub(r'\s+', ' ', str(value)).strip()
 
+    def render_template(self, template: Any, token_values: Dict[str, Any]) -> str:
+        """Render {tokens} safely; unknown tokens are replaced with empty string."""
+        if template is None:
+            return ''
+        text = str(template)
+        return re.sub(r'\{([^{}]+)\}', lambda m: str(token_values.get(m.group(1), '')), text)
+
     def looks_like_product_description(self, value: Optional[str]) -> bool:
         text = self.normalize_text(value)
         if not text:
@@ -591,8 +598,8 @@ class Scraper:
             'product_name_sanitized': product_without_brand,
         }
 
-        brand_folder = safe_filename(brand_folder_tpl.format(**token_values))
-        product_folder = safe_filename(product_folder_tpl.format(**token_values))
+        brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
+        product_folder = safe_filename(self.render_template(product_folder_tpl, token_values))
         out_dir = os.path.join(self.image_dir, brand_folder, product_folder)
 
         result: Dict[str, List[str]] = {}
@@ -625,7 +632,13 @@ class Scraper:
 
                     if download_flag:
                         ensure_dir(out_dir)
-                        base_name = naming.format(index=image_index)
+                        naming_tokens = {
+                            **token_values,
+                            'index': image_index,
+                            'key': key,
+                            'ext': ext,
+                        }
+                        base_name = self.render_template(naming, naming_tokens) or f"image_{image_index}"
                         file_name = f"{safe_filename(base_name)}.{ext}"
                         image_path = os.path.join(out_dir, file_name)
                         if download_image(image_url, image_path):
