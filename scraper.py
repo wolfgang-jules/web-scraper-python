@@ -5,7 +5,7 @@ from copy import deepcopy
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # --- Utility Functions ---
 def safe_filename(name: str) -> str:
@@ -50,8 +50,11 @@ class Scraper:
         with open(config_path, encoding='utf-8') as f:
             self.config = json.load(f)
         self.brand = self.config['brand']
-        self.data_dir = self.config['output']['data_dir']
-        self.image_dir = self.config['output']['image_dir']
+        output_cfg = self.config.get('output', {})
+        self.output_root = output_cfg.get('root_dir') or 'output'
+        self.brand_root = self.get_brand_root(self.brand)
+        self.data_dir = self.get_data_dir(self.brand)
+        self.image_dir = self.get_images_dir(self.brand)
         ensure_dir(self.data_dir)
         ensure_dir(self.image_dir)
         self.session = requests.Session()
@@ -82,13 +85,15 @@ class Scraper:
                 print(f"[WARN] Page title not found for {page_url}; using fallback '{page_title}'")
 
             print(f"[INFO] Page: {page_title}")
+            page_category = self.resolve_category(page.get('category'), page_title)
             page_result: Dict[str, Any] = {
                 'url': page_url,
                 'page_title': page_title,
+                'category': page_category,
             }
 
             if self.is_listing_page(page):
-                products = self.extract_listing_products(soup, page)
+                products = self.extract_listing_products(soup, page, page_category, page_url)
                 products = self.deduplicate_products(products)
                 print(f"[INFO] Products found: {len(products)}")
 
@@ -126,11 +131,17 @@ class Scraper:
 
     def is_listing_page(self, page_cfg: Dict[str, Any]) -> bool:
         selectors = page_cfg.get('selectors', {})
-        return page_cfg.get('type') == 'listing' or bool(selectors.get('product_container'))
+        return page_cfg.get('type') == 'listing' or bool(selectors.get('product_container') or selectors.get('product_containers'))
 
-    def extract_listing_products(self, soup: BeautifulSoup, page_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def extract_listing_products(
+        self,
+        soup: BeautifulSoup,
+        page_cfg: Dict[str, Any],
+        page_category: str,
+        page_url: str,
+    ) -> List[Dict[str, Any]]:
         selectors = page_cfg.get('selectors', {})
-        product_container_sel = selectors.get('product_container')
+        product_container_sel = selectors.get('product_container') or selectors.get('product_containers')
         fields = selectors.get('fields', [])
 
         if not product_container_sel:
@@ -138,9 +149,17 @@ class Scraper:
 
         products: List[Dict[str, Any]] = []
         base_url = page_cfg.get('url', '')
+        containers = self.query_all_first_match(
+            soup,
+            product_container_sel,
+            context=f"{page_url} product containers",
+        )
+        if not containers:
+            print(f"[WARN] Listing page without product containers: {page_url}")
+            return []
 
-        for container in soup.select(product_container_sel):
-            item: Dict[str, Any] = {}
+        for container in containers:
+            item: Dict[str, Any] = {'category': page_category}
             for field in fields:
                 key = field.get('key')
                 if not key:
@@ -185,7 +204,7 @@ class Scraper:
         return deduped
 
     def extract_field_value(self, container: BeautifulSoup, field_cfg: Dict[str, Any], base_url: str) -> Any:
-        selector = field_cfg.get('selector')
+        selector = field_cfg.get('selector') or field_cfg.get('selectors')
         mode = field_cfg.get('mode', 'text')
         multiple = bool(field_cfg.get('multiple', False))
         normalize_url = bool(field_cfg.get('normalize_url', False))
@@ -193,7 +212,7 @@ class Scraper:
         if not selector:
             return [] if multiple else None
 
-        nodes = container.select(selector)
+        nodes = self.query_all_first_match(container, selector)
         if not nodes:
             return [] if multiple else None
 
@@ -248,22 +267,7 @@ class Scraper:
                     if download_flag:
                         allowed_exts = set(ext.lower() for ext in image_cfg.get('allowed_extensions', []))
                         naming = image_cfg.get('naming', 'image_{index}')
-                        folders_cfg = image_cfg.get('folders', {})
-                        brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
-
-                        brand_safe = safe_filename(self.brand)
-                        product_safe = safe_filename(str(product.get('product_name') or 'unnamed'))
-                        product_without_brand = re.sub(rf'^{re.escape(brand_safe)}[_-]*', '', product_safe)
-                        if not product_without_brand:
-                            product_without_brand = product_safe
-
-                        token_values = {
-                            'brand': brand_safe,
-                            'product_name_sanitized': product_without_brand,
-                        }
-
-                        brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
-                        out_dir = os.path.join(self.image_dir, brand_folder)
+                        out_dir, token_values = self.resolve_image_output_dir(product.get('product_name'))
 
                         ext = get_file_extension(listing_img_url) or 'jpg'
                         if allowed_exts and ext.lower() not in allowed_exts:
@@ -407,15 +411,15 @@ class Scraper:
         skip_if_title_empty = bool(cfg_rules.get('skip_if_title_empty', False))
         skip_if_no_values = bool(cfg_rules.get('skip_if_no_values', False))
 
-        containers = soup.select(container_sel) if container_sel else [soup]
+        containers = self.query_all_first_match(soup, container_sel) if container_sel else [soup]
         out: List[Dict[str, Any]] = []
 
         for container in containers:
-            sections = container.select(section_sel) if section_sel else []
+            sections = self.query_all_first_match(container, section_sel) if section_sel else []
 
             # Fallback: some pages don't use section containers, but do have h4 + list/table blocks.
             if not sections and title_sel:
-                for heading in container.select(title_sel):
+                for heading in self.query_all_first_match(container, title_sel):
                     title = heading.get_text(strip=True)
                     if skip_if_title_empty and not title:
                         continue
@@ -436,7 +440,7 @@ class Scraper:
             for section in sections:
                 title = ''
                 if title_sel:
-                    title_el = section.select_one(title_sel)
+                    title_el = self.query_first(section, title_sel)
                     if title_el:
                         title = title_el.get_text(strip=True)
 
@@ -461,12 +465,12 @@ class Scraper:
                 continue
 
             if v_mode == 'list':
-                for el in section.select(v_sel):
+                for el in self.query_all_first_match(section, v_sel):
                     txt = el.get_text(strip=True)
                     if txt:
                         values.append(txt)
             elif v_mode == 'table':
-                for table in section.select(v_sel):
+                for table in self.query_all_first_match(section, v_sel):
                     rows = table.find_all('tr')
                     if rows:
                         for row in rows:
@@ -478,7 +482,7 @@ class Scraper:
                         if txt:
                             values.append(txt)
             else:
-                for el in section.select(v_sel):
+                for el in self.query_all_first_match(section, v_sel):
                     txt = el.get_text(strip=True)
                     if txt:
                         values.append(txt)
@@ -492,11 +496,11 @@ class Scraper:
         cfg_rules = rule.get('rules', {}) if isinstance(rule.get('rules', {}), dict) else {}
         drop_items_if_title_empty = bool(cfg_rules.get('drop_items_if_title_empty', False))
 
-        containers = soup.select(container_sel) if container_sel else [soup]
+        containers = self.query_all_first_match(soup, container_sel) if container_sel else [soup]
         out: List[Dict[str, Any]] = []
 
         for container in containers:
-            items = container.select(item_sel) if item_sel else [container]
+            items = self.query_all_first_match(container, item_sel) if item_sel else [container]
             for node in items:
                 item: Dict[str, Any] = {}
                 for field in fields:
@@ -518,12 +522,12 @@ class Scraper:
         title_sel = rule.get('pair_title_selector')
         text_sel = rule.get('pair_text_selector')
 
-        containers = soup.select(container_sel) if container_sel else [soup]
+        containers = self.query_all_first_match(soup, container_sel) if container_sel else [soup]
         out: List[Dict[str, str]] = []
 
         for container in containers:
-            titles = [el.get_text(strip=True) for el in container.select(title_sel)] if title_sel else []
-            texts = [el.get_text(strip=True) for el in container.select(text_sel)] if text_sel else []
+            titles = [el.get_text(strip=True) for el in self.query_all_first_match(container, title_sel)] if title_sel else []
+            texts = [el.get_text(strip=True) for el in self.query_all_first_match(container, text_sel)] if text_sel else []
             max_len = max(len(titles), len(texts), 0)
 
             for i in range(max_len):
@@ -542,15 +546,15 @@ class Scraper:
         ignore_patterns = [re.compile(p) for p in rule.get('ignore_if_title_matches', [])]
         skip_only_title = bool(rule.get('skip_sections_where_only_title_is_product_name', False))
 
-        containers = soup.select(container_sel) if container_sel else [soup]
+        containers = self.query_all_first_match(soup, container_sel) if container_sel else [soup]
         sections_out: List[Dict[str, Any]] = []
 
         for container in containers:
-            sections = container.select(section_container_sel) if section_container_sel else [container]
+            sections = self.query_all_first_match(container, section_container_sel) if section_container_sel else [container]
             for section in sections:
                 title = None
                 if title_sel:
-                    title_el = section.select_one(title_sel)
+                    title_el = self.query_first(section, title_sel)
                     if title_el:
                         title = title_el.get_text(strip=True)
 
@@ -565,17 +569,17 @@ class Scraper:
                         continue
 
                     if c_mode == 'list':
-                        for el in section.select(c_sel):
+                        for el in self.query_all_first_match(section, c_sel):
                             txt = el.get_text(strip=True)
                             if txt:
                                 items.append(txt)
                     elif c_mode == 'text':
-                        for el in section.select(c_sel):
+                        for el in self.query_all_first_match(section, c_sel):
                             txt = el.get_text(strip=True)
                             if txt:
                                 items.append(txt)
                     elif c_mode == 'table':
-                        for table in section.select(c_sel):
+                        for table in self.query_all_first_match(section, c_sel):
                             rows = table.find_all('tr')
                             if rows:
                                 for row in rows:
@@ -603,12 +607,12 @@ class Scraper:
         title_sel = rule.get('title_selector')
         text_sel = rule.get('text_selector')
 
-        containers = soup.select(container_sel) if container_sel else [soup]
+        containers = self.query_all_first_match(soup, container_sel) if container_sel else [soup]
         pairs: List[Dict[str, str]] = []
 
         for container in containers:
-            titles = [el.get_text(strip=True) for el in container.select(title_sel)] if title_sel else []
-            texts = [el.get_text(strip=True) for el in container.select(text_sel)] if text_sel else []
+            titles = [el.get_text(strip=True) for el in self.query_all_first_match(container, title_sel)] if title_sel else []
+            texts = [el.get_text(strip=True) for el in self.query_all_first_match(container, text_sel)] if text_sel else []
             max_len = max(len(titles), len(texts), 0)
 
             for i in range(max_len):
@@ -632,7 +636,7 @@ class Scraper:
             if not container_sel:
                 containers = [soup]
             else:
-                containers = soup.select(container_sel)
+                containers = self.query_all_first_match(soup, container_sel)
 
             for c in containers:
                 if extract_mode == 'container':
@@ -644,7 +648,7 @@ class Scraper:
                         if not sel:
                             item[ckey] = None
                             continue
-                        el = c.select_one(sel)
+                        el = self.query_first(c, sel)
                         if not el:
                             item[ckey] = None
                             continue
@@ -686,52 +690,27 @@ class Scraper:
         download_flag = bool(image_cfg.get('download', False))
         allowed_exts = set(ext.lower() for ext in image_cfg.get('allowed_extensions', []))
         naming = image_cfg.get('naming', 'image_{index}')
-
-        folders_cfg = image_cfg.get('folders', {})
-        # New single-template `path_folder` supports nested paths like "{brand}/{product_name_sanitized}".
-        # Keep compatibility with older `brand_folder` / `product_folder` keys if present.
-        path_folder_tpl = folders_cfg.get('path_folder')
-        brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
-        product_folder_tpl = folders_cfg.get('product_folder')
-
-        brand_safe = safe_filename(self.brand)
-        product_safe = safe_filename(str(product_name or 'unnamed'))
-        product_without_brand = re.sub(rf'^{re.escape(brand_safe)}[_-]*', '', product_safe)
-        if not product_without_brand:
-            product_without_brand = product_safe
-
-        token_values = {
-            'brand': brand_safe,
-            'product_name_sanitized': product_without_brand,
-        }
-
-        if path_folder_tpl:
-            rendered = self.render_template(path_folder_tpl, token_values)
-            # Allow user to supply slashes to create nested folders; sanitize each segment.
-            parts = [safe_filename(p) for p in rendered.split('/') if p != '']
-            out_dir = os.path.join(self.image_dir, *parts) if parts else os.path.join(self.image_dir, safe_filename(brand_safe))
-        elif product_folder_tpl:
-            product_folder = safe_filename(self.render_template(product_folder_tpl, token_values))
-            out_dir = os.path.join(self.image_dir, product_folder)
-        else:
-            brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
-            out_dir = os.path.join(self.image_dir, brand_folder)
+        out_dir, token_values = self.resolve_image_output_dir(product_name)
 
         result: Dict[str, List[str]] = {}
         image_index = 1
 
         for source in sources:
             key = source.get('key', 'images')
-            container_sel = source.get('container_selector')
-            image_sel = source.get('image_selector', 'img')
+            container_sel = source.get('container_selector') or source.get('container_selectors')
+            image_sel = source.get('image_selector') or source.get('image_selectors') or 'img'
             mode = source.get('mode', 'attr')
             attr = source.get('attr', 'src')
 
-            containers = soup.select(container_sel) if container_sel else [soup]
+            containers = self.query_all_first_match(
+                soup,
+                container_sel,
+                context=f"{base_url} image containers ({key})",
+            ) if container_sel else [soup]
             collected: List[str] = []
 
             for container in containers:
-                for node in container.select(image_sel):
+                for node in self.query_all_first_match(container, image_sel):
                     if mode == 'attr':
                         value = node.get(attr) or node.get('src') or node.get('data-src')
                     else:
@@ -772,43 +751,33 @@ class Scraper:
     def process_image_blocks(self, soup: BeautifulSoup, base_url: str, image_blocks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """Legacy support: process image blocks list and optionally download images."""
         images_result: Dict[str, List[str]] = {}
-        # Use brand folder from configuration for legacy image blocks.
-        image_cfg = self.config.get('images', {})
-        folders_cfg = image_cfg.get('folders', {})
-        path_folder_tpl = folders_cfg.get('path_folder')
-        brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
-        brand_safe = safe_filename(self.brand)
-
-        # For legacy image blocks (page-level), prefer `path_folder` but render without a product name.
-        if path_folder_tpl:
-            rendered = self.render_template(path_folder_tpl, {'brand': brand_safe, 'product_name_sanitized': ''})
-            parts = [safe_filename(p) for p in rendered.split('/') if p != '']
-            brand_dir = safe_filename(parts[0]) if parts else safe_filename(self.brand)
-        else:
-            brand_dir = safe_filename(self.render_template(brand_folder_tpl, {'brand': brand_safe}))
+        out_dir, _ = self.resolve_image_output_dir(None)
 
         for block in image_blocks:
             key = block.get('key', 'images')
-            container_sel = block.get('container_selector')
-            img_sel = block.get('image_selector', 'img')
+            container_sel = block.get('container_selector') or block.get('container_selectors')
+            img_sel = block.get('image_selector') or block.get('image_selectors') or 'img'
             download_flag = block.get('download', False)
             collected: List[str] = []
 
             if container_sel:
-                containers = soup.select(container_sel)
+                containers = self.query_all_first_match(
+                    soup,
+                    container_sel,
+                    context=f"{base_url} image block containers ({key})",
+                )
             else:
                 containers = [soup]
 
             img_count = 1
             for c in containers:
-                for img in c.select(img_sel):
+                for img in self.query_all_first_match(c, img_sel):
                     src = img.get('src') or img.get('data-src') or img.get('data-original')
                     if not src:
                         continue
                     img_url = urljoin(base_url, src)
                     if download_flag:
                         ext = get_file_extension(img_url) or 'jpg'
-                        out_dir = os.path.join(self.image_dir, brand_dir)
                         ensure_dir(out_dir)
                         img_filename = f"{key}_{img_count}.{ext}"
                         img_path = os.path.join(out_dir, img_filename)
@@ -823,9 +792,115 @@ class Scraper:
 
         return images_result
 
-    def extract_page_title(self, soup: BeautifulSoup, selector: str) -> Optional[str]:
+    def get_brand_root(self, brand: str) -> str:
+        return os.path.join(self.output_root, safe_filename(brand))
+
+    def get_data_dir(self, brand: str) -> str:
+        return os.path.join(self.get_brand_root(brand), 'data')
+
+    def get_images_dir(self, brand: str) -> str:
+        return os.path.join(self.get_brand_root(brand), 'images')
+
+    # Aliases kept for parity with external naming in task notes.
+    def getBrandRoot(self, brand: str) -> str:
+        return self.get_brand_root(brand)
+
+    def getDataDir(self, brand: str) -> str:
+        return self.get_data_dir(brand)
+
+    def getImagesDir(self, brand: str) -> str:
+        return self.get_images_dir(brand)
+
+    def selector_candidates(self, selector_or_selectors: Any) -> List[str]:
+        if isinstance(selector_or_selectors, str):
+            value = selector_or_selectors.strip()
+            return [value] if value else []
+        if isinstance(selector_or_selectors, (list, tuple)):
+            out: List[str] = []
+            for value in selector_or_selectors:
+                if isinstance(value, str) and value.strip():
+                    out.append(value.strip())
+            return out
+        return []
+
+    def query_first(self, root: BeautifulSoup, selector_or_selectors: Any) -> Optional[BeautifulSoup]:
+        for selector in self.selector_candidates(selector_or_selectors):
+            found = root.select_one(selector)
+            if found:
+                return found
+        return None
+
+    def query_all_first_match(
+        self,
+        root: BeautifulSoup,
+        selector_or_selectors: Any,
+        context: Optional[str] = None,
+    ) -> List[BeautifulSoup]:
+        selectors = self.selector_candidates(selector_or_selectors)
+        for selector in selectors:
+            found = root.select(selector)
+            if found:
+                return found
+
+        if context and selectors:
+            joined = ' | '.join(selectors)
+            print(f"[WARN] No matches for any selector ({context}): {joined}")
+        return []
+
+    # Aliases kept for parity with external naming in task notes.
+    def queryFirst(self, root: BeautifulSoup, selectors: Any) -> Optional[BeautifulSoup]:
+        return self.query_first(root, selectors)
+
+    def queryAllFirstMatch(self, root: BeautifulSoup, selectors: Any, context: Optional[str] = None) -> List[BeautifulSoup]:
+        return self.query_all_first_match(root, selectors, context=context)
+
+    def resolve_category(self, category: Optional[str], page_title: Optional[str]) -> str:
+        category_text = self.normalize_text(category)
+        title_text = self.normalize_text(page_title)
+
+        source = category_text or title_text
+        lowered = source.casefold()
+        if 'mpos' in lowered:
+            return 'MPOS'
+        if 'victa' in lowered:
+            return 'Victa'
+        if not source:
+            return 'Unknown'
+        return source
+
+    def resolve_image_output_dir(self, product_name: Optional[str]) -> Tuple[str, Dict[str, str]]:
+        image_cfg = self.config.get('images', {})
+        folders_cfg = image_cfg.get('folders', {}) if isinstance(image_cfg, dict) else {}
+        path_folder_tpl = folders_cfg.get('path_folder')
+        product_folder_tpl = folders_cfg.get('product_folder')
+
+        brand_safe = safe_filename(self.brand)
+        product_safe = safe_filename(str(product_name or 'unnamed'))
+        product_without_brand = re.sub(rf'^{re.escape(brand_safe)}[_-]*', '', product_safe)
+        if not product_without_brand:
+            product_without_brand = product_safe
+
+        token_values = {
+            'brand': brand_safe,
+            'product_name_sanitized': product_without_brand,
+        }
+
+        out_dir = self.image_dir
+        if path_folder_tpl:
+            rendered = self.render_template(path_folder_tpl, token_values)
+            parts = [safe_filename(p) for p in rendered.split('/') if p]
+            if parts:
+                out_dir = os.path.join(self.image_dir, *parts)
+        elif product_folder_tpl:
+            rendered = safe_filename(self.render_template(product_folder_tpl, token_values))
+            if rendered:
+                out_dir = os.path.join(self.image_dir, rendered)
+
+        return out_dir, token_values
+
+    def extract_page_title(self, soup: BeautifulSoup, selector: Any) -> Optional[str]:
         if selector:
-            el = soup.select_one(selector)
+            el = self.query_first(soup, selector)
             if el:
                 return el.get_text(strip=True)
 
@@ -849,6 +924,10 @@ class Scraper:
         return merged
 
     def default_link_template(self) -> Dict[str, Any]:
+        defaults = self.config.get('link_defaults')
+        if isinstance(defaults, dict):
+            return deepcopy(defaults)
+
         defaults = self.config.get('master_page')
         if isinstance(defaults, dict):
             return deepcopy(defaults)
@@ -905,10 +984,12 @@ class Scraper:
         products: Optional[List[Dict[str, Any]]],
         page_index: int,
     ):
-        category = self.normalize_text(
+        category = self.resolve_category(
             page_cfg.get('category') or page_cfg.get('slug') or page_cfg.get('name')
+            ,
+            page_result.get('page_title'),
         )
-        if not category:
+        if category == 'Unknown':
             category = self.infer_category_from_url(page_cfg.get('url', ''), page_index)
 
         include_flat_products = self.normalize_truthy_flag(
@@ -924,7 +1005,7 @@ class Scraper:
         if include_flat_products and products:
             payload['products'] = products
 
-        base_name = f"{safe_filename(self.brand)}_{safe_filename(category)}.json"
+        base_name = f"{safe_filename(category)}.json"
         out_path = os.path.join(self.data_dir, base_name)
         ensure_dir(os.path.dirname(out_path))
         with open(out_path, 'w', encoding='utf-8') as f:

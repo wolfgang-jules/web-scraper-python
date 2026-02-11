@@ -11,38 +11,59 @@
 		}
 	],
 	"output": {
-		"data_dir": "output/data",
-		"image_dir": "output/images",
+		"root_dir": "output",
 		"save_per_link_files": true,
 		"save_combined_file": true
 	},
 	"master_page": {
 		"type": "listing",
 		"selectors": {
-			"product_container": "div.hardware-products_item",
+			"product_containers": [
+				"div.hardware-products_item",
+				"div.hardware-card_wrap",
+				"div.hardware-products_list div.w-dyn-item",
+				"div.c-grid div.hardware-card_wrap"
+			],
 			"fields": [
 				{
 					"key": "name",
-					"selector": "h3.hardware-card_content_title",
+					"selectors": [
+						"h3.hardware-card_content_title",
+						"h3.u-text-style-h4",
+						"h3"
+					],
 					"mode": "text",
 					"multiple": false
 				},
 				{
 					"key": "description",
-					"selector": "p.hardware-card_content_description",
+					"selectors": [
+						"p.hardware-card_content_description",
+						"p.u-text-style-small",
+						"p"
+					],
 					"mode": "text",
 					"multiple": false
 				},
 				{
 					"key": "listing_image_url",
-					"selector": "div.hardware-card_img img",
+					"selectors": [
+						"div.hardware-card_img img",
+						"img.image.u-cover-absolute",
+						"img[src]"
+					],
 					"mode": "attr",
 					"attr": "src",
 					"multiple": false
 				},
 				{
 					"key": "detail_url",
-					"selector": "a[href*='/hardware-product/']",
+					"selectors": [
+						"a[href*='/hardware-product/']",
+						"a[href*='/en/us/hardware-product/']",
+						"a.clickable_link[href]",
+						"a[href*='go.verifone.com']"
+					],
 					"mode": "attr",
 					"attr": "href",
 					"multiple": false,
@@ -55,12 +76,18 @@
 		"selectors": {
 			"product_name": [
 				{
-					"selector": "div.rte-section-block h4 strong",
+					"selector": [
+						"div.rte-section-block h4 strong",
+						"h1"
+					],
 					"mode": "text",
 					"multiple": false
 				},
 				{
-					"selector": "h1",
+					"selector": [
+						"h1",
+						"h2"
+					],
 					"mode": "text",
 					"multiple": false
 				}
@@ -120,22 +147,36 @@
 	"images": {
 		"download": true,
 		"folders": {
-			"path_folder": "{brand}"
+			"path_folder": ""
 		},
 		"naming": "img_{brand}_{product_name_sanitized}_{index}",
 		"sources": [
 			{
 				"key": "primary_image",
-				"container_selector": "div.triple-features_media",
-				"image_selector": "img",
+				"container_selectors": [
+					"div.triple-features_media",
+					"div.hardware-card_img",
+					"figure.w-richtext-figure-type-image"
+				],
+				"image_selectors": [
+					"img",
+					"img[src]",
+					"img[data-src]"
+				],
 				"mode": "attr",
 				"attr": "src",
 				"multiple": true
 			},
 			{
 				"key": "specs_figure_images",
-				"container_selector": "figure.w-richtext-figure-type-image",
-				"image_selector": "img",
+				"container_selectors": [
+					"figure.w-richtext-figure-type-image",
+					"div.richtext_contain"
+				],
+				"image_selectors": [
+					"img",
+					"img[src]"
+				],
 				"mode": "attr",
 				"attr": "src",
 				"multiple": true

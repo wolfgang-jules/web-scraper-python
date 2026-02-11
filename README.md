@@ -24,8 +24,10 @@ Estructura importante del `config.json` actualizado:
 - `links`: lista de URLs/categorías a scrapear reutilizando `master_page`.
   - Puede ser string (`"https://sitio/categoria"`) o objeto (`{"category": "...", "url": "..."}`).
   - Cada link puede sobrescribir partes de `master_page` si lo necesitas.
+- Los selectores aceptan string o arreglos (fallback en orden): `selector` o `selectors`.
 - `output.save_per_link_files`: si es `true`, guarda un JSON por link/categoría.
 - `output.save_combined_file`: si es `true`, también guarda el archivo combinado de toda la marca.
+- `output.root_dir`: raíz de salida (por defecto `output`), con estructura `output/{brand}/data` y `output/{brand}/images`.
 
 ## Ejecución
 
@@ -36,9 +38,9 @@ python main.py --config config.json
 ```
 
 -- El scraper descargará las secciones encontradas y las imágenes de cada página definida en `links`.
--- Los datos se guardarán en `output/data/{brand}.json` (la clave principal contiene `pages`).
--- Si `output.save_per_link_files=true`, también se genera `output/data/{brand}_{category}.json` por cada URL.
--- Las imágenes se guardarán en `output/images/{Brand}/{Page_Title}/`.
+-- Los datos se guardarán en `output/{brand}/data/{brand}.json` (la clave principal contiene `pages`).
+-- Si `output.save_per_link_files=true`, también se genera `output/{brand}/data/{category}.json` por cada URL.
+-- Las imágenes se guardarán en `output/{brand}/images/`.
 
 ## Notas
 
