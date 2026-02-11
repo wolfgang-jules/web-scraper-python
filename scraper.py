@@ -1,6 +1,7 @@
 import os
 import json
 import re
+from copy import deepcopy
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
@@ -59,8 +60,14 @@ class Scraper:
     def scrape(self):
         pages: List[Dict[str, Any]] = []
         all_products: List[Dict[str, Any]] = []
+        save_per_link_files = self.normalize_truthy_flag(
+            self.config.get('output', {}).get('save_per_link_files', True)
+        )
+        save_combined_file = self.normalize_truthy_flag(
+            self.config.get('output', {}).get('save_combined_file', True)
+        )
 
-        for page in self.config.get('links', []):
+        for idx, page in enumerate(self.resolve_links(), start=1):
             page_url = page.get('url')
             print(f"[INFO] Scraping: {page_url}")
             soup = self.fetch_soup(page_url)
@@ -100,9 +107,13 @@ class Scraper:
                 page_result['images'] = images
 
             pages.append(page_result)
+            if save_per_link_files:
+                page_products = page_result.get('products')
+                self.save_single_link_output(page, page_result, page_products, idx)
 
         all_products = self.deduplicate_products(all_products)
-        self.save_output(pages, all_products)
+        if save_combined_file:
+            self.save_output(pages, all_products)
 
     def fetch_soup(self, url: str) -> Optional[BeautifulSoup]:
         try:
@@ -827,6 +838,98 @@ class Scraper:
             return title_tag.get_text(strip=True)
 
         return None
+
+    def deep_merge_dicts(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(base)
+        for key, value in override.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = self.deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    def default_link_template(self) -> Dict[str, Any]:
+        defaults = self.config.get('link_defaults')
+        if isinstance(defaults, dict):
+            return deepcopy(defaults)
+
+        # Compatibility shortcut: allow top-level `listing` as shared page template.
+        listing = self.config.get('listing')
+        if isinstance(listing, dict):
+            fallback = deepcopy(listing)
+            if 'type' not in fallback:
+                fallback['type'] = 'listing'
+            return fallback
+
+        return {}
+
+    def infer_category_from_url(self, url: str, index: int) -> str:
+        parsed = urlparse(url or '')
+        path_parts = [p for p in parsed.path.split('/') if p]
+        if path_parts:
+            return safe_filename(path_parts[-1])
+        if parsed.netloc:
+            return safe_filename(parsed.netloc)
+        return f"link_{index}"
+
+    def resolve_links(self) -> List[Dict[str, Any]]:
+        resolved: List[Dict[str, Any]] = []
+        shared_template = self.default_link_template()
+
+        for idx, raw_link in enumerate(self.config.get('links', []), start=1):
+            if isinstance(raw_link, str):
+                link_cfg = {'url': raw_link}
+            elif isinstance(raw_link, dict):
+                link_cfg = raw_link
+            else:
+                print(f"[WARN] Invalid link entry at index {idx}: {raw_link}")
+                continue
+
+            page_cfg = self.deep_merge_dicts(deepcopy(shared_template), link_cfg)
+            page_url = page_cfg.get('url')
+            if not page_url:
+                print(f"[WARN] Skipping link entry without URL at index {idx}")
+                continue
+
+            if not self.normalize_text(page_cfg.get('category')):
+                page_cfg['category'] = self.infer_category_from_url(page_url, idx)
+
+            resolved.append(page_cfg)
+
+        return resolved
+
+    def save_single_link_output(
+        self,
+        page_cfg: Dict[str, Any],
+        page_result: Dict[str, Any],
+        products: Optional[List[Dict[str, Any]]],
+        page_index: int,
+    ):
+        category = self.normalize_text(
+            page_cfg.get('category') or page_cfg.get('slug') or page_cfg.get('name')
+        )
+        if not category:
+            category = self.infer_category_from_url(page_cfg.get('url', ''), page_index)
+
+        include_flat_products = self.normalize_truthy_flag(
+            self.config.get('output', {}).get('include_flat_products', False)
+        )
+
+        payload: Dict[str, Any] = {
+            'brand': self.brand,
+            'category': category,
+            'url': page_result.get('url'),
+            'page': page_result,
+        }
+        if include_flat_products and products:
+            payload['products'] = products
+
+        base_name = f"{safe_filename(self.brand)}_{safe_filename(category)}.json"
+        out_path = os.path.join(self.data_dir, base_name)
+        ensure_dir(os.path.dirname(out_path))
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(f"[INFO] Output saved to {out_path}")
 
     def save_output(self, pages: List[Dict[str, Any]], products: Optional[List[Dict[str, Any]]] = None):
         out_path = os.path.join(self.data_dir, f"{safe_filename(self.brand)}.json")

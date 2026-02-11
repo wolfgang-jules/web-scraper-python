@@ -2,44 +2,49 @@
 	"brand": "verifone",
 	"output": {
 		"data_dir": "output/data",
-		"image_dir": "output/images"
+		"image_dir": "output/images",
+		"save_per_link_files": true,
+		"save_combined_file": true
+	},
+	"link_defaults": {
+		"type": "listing",
+		"selectors": {
+			"product_container": "div.hardware-products_item",
+			"fields": [
+				{
+					"key": "name",
+					"selector": "h3.hardware-card_content_title",
+					"mode": "text",
+					"multiple": false
+				},
+				{
+					"key": "description",
+					"selector": "p.hardware-card_content_description",
+					"mode": "text",
+					"multiple": false
+				},
+				{
+					"key": "listing_image_url",
+					"selector": "div.hardware-card_img img",
+					"mode": "attr",
+					"attr": "src",
+					"multiple": false
+				},
+				{
+					"key": "detail_url",
+					"selector": "a[href*='/hardware-product/']",
+					"mode": "attr",
+					"attr": "href",
+					"multiple": false,
+					"normalize_url": true
+				}
+			]
+		}
 	},
 	"links": [
 		{
-			"url": "https://www.verifone.com/en-us/products",
-			"type": "listing",
-			"selectors": {
-				"product_container": "div.hardware-products_item",
-				"fields": [
-					{
-						"key": "name",
-						"selector": "h3.hardware-card_content_title",
-						"mode": "text",
-						"multiple": false
-					},
-					{
-						"key": "description",
-						"selector": "p.hardware-card_content_description",
-						"mode": "text",
-						"multiple": false
-					},
-					{
-						"key": "listing_image_url",
-						"selector": "div.hardware-card_img img",
-						"mode": "attr",
-						"attr": "src",
-						"multiple": false
-					},
-					{
-						"key": "detail_url",
-						"selector": "a[href*='/hardware-product/']",
-						"mode": "attr",
-						"attr": "href",
-						"multiple": false,
-						"normalize_url": true
-					}
-				]
-			}
+			"category": "products",
+			"url": "https://www.verifone.com/en-us/products"
 		}
 	],
 	"detail": {

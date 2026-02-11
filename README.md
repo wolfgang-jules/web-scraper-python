@@ -20,11 +20,12 @@ pip install requests beautifulsoup4
 
 Estructura importante del `config.json` actualizado:
 
-- La lista de páginas se llama `links` (lista de objetos).
-- Cada objeto de `links` contiene:
-  - `url`: la URL a scrapear.
-  - `page_title_selector`: selector CSS para obtener el título de la página.
-  - `specification_block`: mismo esquema que antes (`section_title_selector`, `section_content_selector`).
+- `link_defaults`: configuración compartida para todas las URLs (selectores, tipo de página, etc.).
+- `links`: lista de URLs/categorías a scrapear reutilizando `link_defaults`.
+  - Puede ser string (`"https://sitio/categoria"`) o objeto (`{"category": "...", "url": "..."}`).
+  - Cada link puede sobrescribir partes de `link_defaults` si lo necesitas.
+- `output.save_per_link_files`: si es `true`, guarda un JSON por link/categoría.
+- `output.save_combined_file`: si es `true`, también guarda el archivo combinado de toda la marca.
 
 ## Ejecución
 
@@ -36,6 +37,7 @@ python main.py --config config.json
 
 -- El scraper descargará las secciones encontradas y las imágenes de cada página definida en `links`.
 -- Los datos se guardarán en `output/data/{brand}.json` (la clave principal contiene `pages`).
+-- Si `output.save_per_link_files=true`, también se genera `output/data/{brand}_{category}.json` por cada URL.
 -- Las imágenes se guardarán en `output/images/{Brand}/{Page_Title}/`.
 
 ## Notas
