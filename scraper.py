@@ -580,9 +580,15 @@ class Scraper:
         brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
         product_folder_tpl = folders_cfg.get('product_folder', '{product_name_sanitized}')
 
+        brand_safe = safe_filename(self.brand)
+        product_safe = safe_filename(str(product_name or 'unnamed'))
+        product_without_brand = re.sub(rf'^{re.escape(brand_safe)}[_-]*', '', product_safe)
+        if not product_without_brand:
+            product_without_brand = product_safe
+
         token_values = {
-            'brand': safe_filename(self.brand),
-            'product_name_sanitized': safe_filename(str(product_name or 'unnamed')),
+            'brand': brand_safe,
+            'product_name_sanitized': product_without_brand,
         }
 
         brand_folder = safe_filename(brand_folder_tpl.format(**token_values))
