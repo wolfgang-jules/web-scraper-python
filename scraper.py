@@ -225,9 +225,54 @@ class Scraper:
             images = self.extract_images_from_config(soup, detail_url, product.get('product_name'))
             if self.has_any_images(images):
                 product['images'] = images
-            elif 'images' in product:
-                # Avoid serializing empty image arrays.
-                product.pop('images', None)
+            else:
+                # Fallback: if no images were extracted from the detail page,
+                # use the listing image URL (and download it if images.download=True).
+                listing_img = product.get('listing_image_url')
+                if listing_img:
+                    listing_img_url = urljoin(detail_url, listing_img)
+                    image_cfg = self.config.get('images', {})
+                    download_flag = bool(image_cfg.get('download', False))
+
+                    if download_flag:
+                        allowed_exts = set(ext.lower() for ext in image_cfg.get('allowed_extensions', []))
+                        naming = image_cfg.get('naming', 'image_{index}')
+                        folders_cfg = image_cfg.get('folders', {})
+                        brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
+
+                        brand_safe = safe_filename(self.brand)
+                        product_safe = safe_filename(str(product.get('product_name') or 'unnamed'))
+                        product_without_brand = re.sub(rf'^{re.escape(brand_safe)}[_-]*', '', product_safe)
+                        if not product_without_brand:
+                            product_without_brand = product_safe
+
+                        token_values = {
+                            'brand': brand_safe,
+                            'product_name_sanitized': product_without_brand,
+                        }
+
+                        brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
+                        out_dir = os.path.join(self.image_dir, brand_folder)
+
+                        ext = get_file_extension(listing_img_url) or 'jpg'
+                        if allowed_exts and ext.lower() not in allowed_exts:
+                            # If the listing image has a filtered extension, fall back to URL.
+                            product['images'] = {'primary_image': [listing_img_url]}
+                        else:
+                            ensure_dir(out_dir)
+                            base_name = self.render_template(naming, {**token_values, 'index': 1, 'key': 'primary_image', 'ext': ext}) or 'image_1'
+                            file_name = f"{safe_filename(base_name)}.{ext}"
+                            image_path = os.path.join(out_dir, file_name)
+                            if download_image(listing_img_url, image_path):
+                                rel = os.path.relpath(image_path, '.').replace('\\', '/')
+                                product['images'] = {'primary_image': [rel]}
+                            else:
+                                product['images'] = {'primary_image': [listing_img_url]}
+                    else:
+                        product['images'] = {'primary_image': [listing_img_url]}
+                elif 'images' in product:
+                    # Avoid serializing empty image arrays.
+                    product.pop('images', None)
 
     def has_any_images(self, images: Dict[str, Any]) -> bool:
         if not isinstance(images, dict):
@@ -632,7 +677,11 @@ class Scraper:
         naming = image_cfg.get('naming', 'image_{index}')
 
         folders_cfg = image_cfg.get('folders', {})
+        # New single-template `path_folder` supports nested paths like "{brand}/{product_name_sanitized}".
+        # Keep compatibility with older `brand_folder` / `product_folder` keys if present.
+        path_folder_tpl = folders_cfg.get('path_folder')
         brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
+        product_folder_tpl = folders_cfg.get('product_folder')
 
         brand_safe = safe_filename(self.brand)
         product_safe = safe_filename(str(product_name or 'unnamed'))
@@ -645,8 +694,17 @@ class Scraper:
             'product_name_sanitized': product_without_brand,
         }
 
-        brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
-        out_dir = os.path.join(self.image_dir, brand_folder)
+        if path_folder_tpl:
+            rendered = self.render_template(path_folder_tpl, token_values)
+            # Allow user to supply slashes to create nested folders; sanitize each segment.
+            parts = [safe_filename(p) for p in rendered.split('/') if p != '']
+            out_dir = os.path.join(self.image_dir, *parts) if parts else os.path.join(self.image_dir, safe_filename(brand_safe))
+        elif product_folder_tpl:
+            product_folder = safe_filename(self.render_template(product_folder_tpl, token_values))
+            out_dir = os.path.join(self.image_dir, product_folder)
+        else:
+            brand_folder = safe_filename(self.render_template(brand_folder_tpl, token_values))
+            out_dir = os.path.join(self.image_dir, brand_folder)
 
         result: Dict[str, List[str]] = {}
         image_index = 1
@@ -703,6 +761,21 @@ class Scraper:
     def process_image_blocks(self, soup: BeautifulSoup, base_url: str, image_blocks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """Legacy support: process image blocks list and optionally download images."""
         images_result: Dict[str, List[str]] = {}
+        # Use brand folder from configuration for legacy image blocks.
+        image_cfg = self.config.get('images', {})
+        folders_cfg = image_cfg.get('folders', {})
+        path_folder_tpl = folders_cfg.get('path_folder')
+        brand_folder_tpl = folders_cfg.get('brand_folder', '{brand}')
+        brand_safe = safe_filename(self.brand)
+
+        # For legacy image blocks (page-level), prefer `path_folder` but render without a product name.
+        if path_folder_tpl:
+            rendered = self.render_template(path_folder_tpl, {'brand': brand_safe, 'product_name_sanitized': ''})
+            parts = [safe_filename(p) for p in rendered.split('/') if p != '']
+            brand_dir = safe_filename(parts[0]) if parts else safe_filename(self.brand)
+        else:
+            brand_dir = safe_filename(self.render_template(brand_folder_tpl, {'brand': brand_safe}))
+
         for block in image_blocks:
             key = block.get('key', 'images')
             container_sel = block.get('container_selector')
@@ -716,7 +789,6 @@ class Scraper:
                 containers = [soup]
 
             img_count = 1
-            brand_dir = safe_filename(self.brand)
             for c in containers:
                 for img in c.select(img_sel):
                     src = img.get('src') or img.get('data-src') or img.get('data-original')
