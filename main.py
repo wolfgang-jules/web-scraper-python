@@ -4,7 +4,7 @@ from scraper import Scraper
 
 def main():
     parser = argparse.ArgumentParser(description="Generic Scraper - runner")
-    parser.add_argument('--config', type=str, default='config-verifone.json')
+    parser.add_argument('--config', type=str, default='config/verifone.json')
     args = parser.parse_args()
     scraper = Scraper(args.config)
     scraper.scrape()
