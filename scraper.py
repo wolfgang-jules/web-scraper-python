@@ -11,7 +11,7 @@ def safe_filename(name: str) -> str:
     """Normalize string for use as a filename or folder name."""
     if not name:
         return 'unnamed'
-    s = name.strip()
+    s = name.strip().lower()
     s = re.sub(r'\s+', '_', s)
     s = re.sub(r'[<>:"/\\|?*]+', '_', s)
     s = re.sub(r'[^A-Za-z0-9_.-]', '_', s)
